@@ -1,131 +1,103 @@
 # OpenClawRouter
 
-Multi-provider AI model router with x402 payment support. Routes OpenAI-compatible requests to the cheapest available x402 provider with automatic failover and smart model selection.
+OpenClaw plugin that routes AI model requests to the cheapest x402 provider with automatic failover and smart model selection.
 
-## Features
-
-- **Multi-provider routing** — routes to 6 x402 providers (x402engine, BlockRun, Daydreams, AskClaude, Spraay, MiniMaxxing)
-- **Cheapest-first pricing** — probes all providers for x402 pricing, sorts by cost
-- **Automatic failover** — retries on 5xx/429/timeout, stops on 4xx (up to 4 attempts)
-- **Smart model selection** — 14-dimension request classifier auto-picks the right model tier
-- **Two payment modes**:
-  - **Obul mode** — routes through Obul's proxy; Obul handles x402 payment (just need an API key)
-  - **Wallet mode** — routes directly to providers; local BIP-39 wallet signs x402 payments on Base
-- **Request deduplication** — SHA-256 dedup prevents duplicate charges from rapid retries
-- **Response caching** — LRU cache for non-streaming responses (10min TTL)
-- **Spend controls** — per-request, hourly, and daily spending limits
-- **Format translation** — automatically translates between OpenAI format and 5 provider-specific formats
-- **Streaming support** — SSE passthrough for streaming responses
-
-## Quick Start
+## Install
 
 ```bash
-npm install
-npm run build
+openclaw plugins add --source git --url https://github.com/obulai/OpenClawRouter
 ```
 
-### Obul Mode (recommended for getting started)
+Or manually:
+
+```bash
+git clone https://github.com/obulai/OpenClawRouter ~/.openclaw/extensions/openclawrouter
+cd ~/.openclaw/extensions/openclawrouter && npm install && npm run build
+```
+
+## Configure
+
+Add to `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclawrouter": {
+        "enabled": true,
+        "config": {
+          "mode": "obul",
+          "routingProfile": "auto",
+          "obulApiKey": "your-key-here"
+        }
+      }
+    }
+  }
+}
+```
+
+Or just set the env var:
 
 ```bash
 export OBUL_API_KEY=your-key-here
-npx openclawrouter start
 ```
 
-### Wallet Mode (direct x402 payments)
+## What It Does
 
-```bash
-# Generate a wallet
-npx openclawrouter wallet init
+Once installed, the plugin:
 
-# Fund the wallet with USDC on Base, then:
-npx openclawrouter start --mode wallet
-```
+1. **Registers `/v1/chat/completions`** on the gateway — an OpenAI-compatible endpoint that routes through 6 x402 providers
+2. **Hooks into `before_model_resolve`** — when an agent requests `model: "auto"`, the 14-dimension classifier picks the optimal model tier
+3. **Registers slash commands** — `/providers` and `/routing` for visibility
 
-### Send requests
-
-```bash
-# Explicit model selection
-curl http://localhost:8402/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello!"}]}'
-
-# Smart routing (auto-selects model based on request complexity)
-curl http://localhost:8402/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "auto", "messages": [{"role": "user", "content": "Hello!"}]}'
-```
-
-## CLI
-
-```bash
-openclawrouter start [options]        # Start the proxy server
-  -p, --port <number>                 # Port (default: 8402)
-  -m, --mode <obul|wallet>            # Payment mode (default: obul)
-  --profile <auto|eco|premium|agentic> # Routing profile (default: auto)
-  --debug                             # Enable debug logging
-
-openclawrouter models                 # List available models
-openclawrouter providers <model>      # List providers for a model
-openclawrouter wallet init [--import] # Generate or import a wallet
-openclawrouter wallet address         # Show wallet address
-openclawrouter wallet balance         # Check USDC balance
-openclawrouter doctor                 # Check system health
-```
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OBUL_API_KEY` | Obul API key (obul mode) | — |
-| `OBUL_BASE_URL` | Obul proxy URL | `https://obul.polymerdao.xyz` |
-| `OPENCLAWROUTER_MODE` | Payment mode | `obul` |
-| `OPENCLAWROUTER_PORT` | Proxy port | `8402` |
-| `OPENCLAWROUTER_PROFILE` | Routing profile | `auto` |
-| `OPENCLAWROUTER_MAX_PER_REQUEST` | Max spend per request (USD cents) | — |
-| `OPENCLAWROUTER_MAX_HOURLY` | Max hourly spend (USD cents) | — |
-| `OPENCLAWROUTER_MAX_DAILY` | Max daily spend (USD cents) | — |
-
-### Custom Routing Config
-
-Place a JSON file at `~/.openclawrouter/config.json` to override default provider configuration. See `src/config/defaults.json` for the schema.
-
-## Architecture
+### How Routing Works
 
 ```
-Client (curl / SDK / agent)
-  │
-  ▼
-Local Proxy (localhost:8402, OpenAI-compatible)
-  ├─ Dedup cache (SHA-256, 30s TTL)
-  ├─ Response cache (LRU, 10min TTL)
+Agent sends LLM request
   │
   ▼
 Smart Routing (14-dimension classifier)
-  ├─ Explicit: model specified → use it
-  └─ Auto: classify request → pick tier → pick model
+  ├─ Explicit model → use it
+  └─ "auto" → classify → pick tier → pick model
   │
   ▼
 Provider Selection
-  ├─ Find all providers offering target model
-  ├─ Probe pricing (parallel, 2s timeout)
+  ├─ Find all providers for model
+  ├─ Probe x402 pricing (parallel, 2s timeout)
   ├─ Sort cheapest-first
-  └─ Apply force-provider override (x-force-provider header)
+  └─ Spend control check
   │
   ▼
 Failover Loop (up to 4 attempts)
-  │  1. Translate request to provider format
-  │  2. Send via payment backend (Obul proxy or direct x402)
-  │  3. Translate response back to OpenAI format
-  │  4. Retry on 5xx/429/timeout → next provider
+  ├─ Translate request to provider format
+  ├─ Send via payment backend (Obul proxy or direct x402)
+  ├─ Translate response back to OpenAI format
+  └─ On 5xx/429/timeout → next provider
   │
   ▼
-Response (OpenAI JSON or SSE stream)
-  + x-provider, x-mode, x-failover-count, x-routing-tier headers
+Response + headers (x-provider, x-mode, x-failover-count, x-routing-tier)
 ```
 
-### Routing Profiles
+## Config Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mode` | `"obul"` \| `"wallet"` | `"obul"` | Payment mode |
+| `routingProfile` | `"auto"` \| `"eco"` \| `"premium"` \| `"agentic"` | `"auto"` | Smart routing profile |
+| `obulApiKey` | string | — | Obul API key (or `OBUL_API_KEY` env) |
+| `obulBaseUrl` | string | `https://obul.polymerdao.xyz` | Obul proxy URL |
+| `walletMnemonic` | string | — | BIP-39 mnemonic for wallet mode |
+| `maxPerRequest` | integer | — | Max spend per request (USD cents) |
+| `maxHourly` | integer | — | Max hourly spend (USD cents) |
+| `maxDaily` | integer | — | Max daily spend (USD cents) |
+
+## Payment Modes
+
+**Obul mode** (recommended): Routes through Obul's proxy. Obul handles x402 payment. You just need an API key.
+
+**Wallet mode**: Routes directly to providers. A local BIP-39 wallet signs x402 payments with USDC on Base.
+
+## Routing Profiles
 
 | Profile | Simple | Medium | Complex | Reasoning |
 |---------|--------|--------|---------|-----------|
@@ -134,7 +106,7 @@ Response (OpenAI JSON or SSE stream)
 | **premium** | claude-sonnet-4-6 | claude-opus-4-6 | gpt-5 | claude-opus-4-6 |
 | **agentic** | claude-sonnet-4-6 | claude-sonnet-4-6 | claude-opus-4-6 | claude-opus-4-6 |
 
-### Supported Providers
+## Providers
 
 | Provider | Host | Format | Dynamic Pricing |
 |----------|------|--------|-----------------|
@@ -145,13 +117,29 @@ Response (OpenAI JSON or SSE stream)
 | Spraay | gateway.spraay.app | spraay | No |
 | MiniMaxxing | minimaxxing.x402endpoints.com | openai | No |
 
+## Slash Commands
+
+- `/providers [model]` — list providers (or all models if no argument)
+- `/routing` — show current mode, profile, and cache stats
+
+## Standalone Mode
+
+For non-OpenClaw usage, a standalone proxy is available:
+
+```bash
+OBUL_API_KEY=your-key npx openclawrouter start
+curl http://localhost:8402/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
 ## Development
 
 ```bash
 npm install
-npm test              # Run tests
-npm run lint          # Type check
-npm run build         # Build with tsup
+npm test        # 263 tests
+npm run lint    # type check
+npm run build
 ```
 
 ## License

@@ -1,0 +1,58 @@
+{
+  "id": "openclawrouter",
+  "name": "OpenClawRouter",
+  "description": "Multi-provider AI model router with x402 payment — routes to the cheapest provider with automatic failover and smart model selection",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["obul", "wallet"],
+        "description": "Payment mode: obul (proxy through Obul) or wallet (direct x402 signing)",
+        "default": "obul"
+      },
+      "routingProfile": {
+        "type": "string",
+        "enum": ["auto", "eco", "premium", "agentic"],
+        "description": "Routing profile for smart model selection",
+        "default": "auto"
+      },
+      "obulApiKey": {
+        "type": "string",
+        "description": "Obul API key (required for obul mode)"
+      },
+      "obulBaseUrl": {
+        "type": "string",
+        "description": "Obul proxy base URL",
+        "default": "https://obul.polymerdao.xyz"
+      },
+      "walletMnemonic": {
+        "type": "string",
+        "description": "BIP-39 mnemonic for wallet mode"
+      },
+      "routingConfigPath": {
+        "type": "string",
+        "description": "Path to custom routing config JSON"
+      },
+      "maxPerRequest": {
+        "type": "integer",
+        "description": "Max spend per request in USD cents"
+      },
+      "maxHourly": {
+        "type": "integer",
+        "description": "Max hourly spend in USD cents"
+      },
+      "maxDaily": {
+        "type": "integer",
+        "description": "Max daily spend in USD cents"
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "obulApiKey": { "label": "Obul API Key", "sensitive": true },
+    "walletMnemonic": { "label": "Wallet Mnemonic", "sensitive": true },
+    "mode": { "label": "Payment Mode" },
+    "routingProfile": { "label": "Routing Profile" }
+  }
+}
